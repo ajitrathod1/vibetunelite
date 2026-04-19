@@ -1,0 +1,6 @@
+{
+  "name": "VibeTune Lite",
+  "description": "Client-side web application that converts user-uploaded audio into Slowed, Reverb, and Lofi versions directly in the browser.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
