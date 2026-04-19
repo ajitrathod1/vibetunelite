@@ -1,7 +1,8 @@
 import { useState, useRef, DragEvent, ChangeEvent } from 'react';
 import { useAudioEngine, Mood } from './hooks/useAudioEngine';
-import { Upload, Play, Pause, Download, Music, Settings2, AlertCircle, Loader2, Maximize } from 'lucide-react';
+import { Upload, Play, Pause, Download, Music, Settings2, AlertCircle, Loader2, Maximize, Orbit, SlidersHorizontal } from 'lucide-react';
 import { cn } from './lib/utils';
+import { Waveform } from './components/Waveform';
 
 export default function App() {
   const {
@@ -15,10 +16,13 @@ export default function App() {
     exportProgress,
     roomSize,
     setRoomSize,
+    pitch,
+    setPitch,
     effects,
     setEffects,
     mood,
     setMood,
+    bufferData,
     loadAudio,
     togglePlay,
     seek,
@@ -151,16 +155,16 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Progress Bar */}
+              {/* Progress Bar (Waveform) */}
               <div className="space-y-2 mb-8">
-                <input
-                  type="range"
-                  min={0}
-                  max={effectiveDuration || 100}
-                  value={progress}
-                  onChange={(e) => seek(Number(e.target.value))}
-                  className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-125 transition-all"
-                />
+                <div className="h-24 w-full rounded-xl overflow-hidden bg-white/5 border border-white/10 relative">
+                  <Waveform 
+                    bufferData={bufferData} 
+                    currentTime={progress} 
+                    duration={effectiveDuration} 
+                    onSeek={seek} 
+                  />
+                </div>
                 <div className="flex justify-between text-xs font-mono text-white/40">
                   <span>{formatTime(progress)}</span>
                   <span>{formatTime(effectiveDuration)}</span>
@@ -224,10 +228,18 @@ export default function App() {
                     label="Deep SubBass"
                   />
                   <EffectButton
-                    active={effects.slowed && effects.reverb && effects.lofi && effects.subbass}
+                    active={effects.eightD}
                     onClick={() => {
-                      const allActive = effects.slowed && effects.reverb && effects.lofi && effects.subbass;
-                      setEffects({ slowed: !allActive, reverb: !allActive, lofi: !allActive, subbass: !allActive });
+                      setEffects(prev => ({ ...prev, eightD: !prev.eightD }));
+                      setMood('none');
+                    }}
+                    label="🎧 8D Audio"
+                  />
+                  <EffectButton
+                    active={effects.slowed && effects.reverb && effects.lofi && effects.subbass && effects.eightD}
+                    onClick={() => {
+                      const allActive = effects.slowed && effects.reverb && effects.lofi && effects.subbass && effects.eightD;
+                      setEffects({ slowed: !allActive, reverb: !allActive, lofi: !allActive, subbass: !allActive, eightD: !allActive });
                       setMood('none');
                     }}
                     label="All Effects Combined"
@@ -235,28 +247,58 @@ export default function App() {
                   />
                 </div>
 
-                <div className="flex items-center gap-2 mb-6 mt-8 text-white/70">
-                  <Maximize className="w-5 h-5" />
-                  <h3 className="font-semibold uppercase tracking-wider text-sm">Room Size</h3>
-                </div>
-                <div className="space-y-4">
-                  <input
-                    type="range"
-                    min={0.1}
-                    max={0.85}
-                    step={0.01}
-                    value={roomSize}
-                    onChange={(e) => {
-                      setRoomSize(Number(e.target.value));
-                      if (!effects.reverb && mood === 'none') {
-                        setEffects(prev => ({ ...prev, reverb: true }));
-                      }
-                    }}
-                    className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-125 transition-all"
-                  />
-                  <div className="flex justify-between text-xs font-mono text-white/40">
-                    <span>Small Room</span>
-                    <span>Arena</span>
+                <div className="mt-8 space-y-6">
+                  {/* Pitch Slider */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-4 text-white/70">
+                      <SlidersHorizontal className="w-4 h-4" />
+                      <h3 className="font-semibold uppercase tracking-wider text-xs">Pitch Level (Semitones)</h3>
+                      <span className="ml-auto text-xs font-mono text-purple-400">
+                        {pitch > 0 ? `+${pitch}` : pitch} st
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={-12}
+                      max={12}
+                      step={1}
+                      value={pitch}
+                      onChange={(e) => {
+                        setPitch(Number(e.target.value));
+                      }}
+                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-purple-500 [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-125 transition-all"
+                    />
+                    <div className="flex justify-between text-[10px] text-white/30 mt-2 font-mono">
+                      <span>-12</span>
+                      <span>0</span>
+                      <span>+12</span>
+                    </div>
+                  </div>
+
+                  {/* Room Size Slider */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-4 text-white/70">
+                      <Maximize className="w-4 h-4" />
+                      <h3 className="font-semibold uppercase tracking-wider text-xs">Reverb Room Size</h3>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.1}
+                      max={0.85}
+                      step={0.01}
+                      value={roomSize}
+                      onChange={(e) => {
+                        setRoomSize(Number(e.target.value));
+                        if (!effects.reverb && mood === 'none') {
+                          setEffects(prev => ({ ...prev, reverb: true }));
+                        }
+                      }}
+                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-125 transition-all"
+                    />
+                    <div className="flex justify-between text-[10px] text-white/30 mt-2 font-mono">
+                      <span>Small Space</span>
+                      <span>Arena</span>
+                    </div>
                   </div>
                 </div>
               </div>

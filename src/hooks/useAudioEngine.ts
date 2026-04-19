@@ -14,14 +14,17 @@ export function useAudioEngine() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [roomSize, setRoomSize] = useState(0.5); // Range 0.1 to 0.9
+  const [bufferData, setBufferData] = useState<Float32Array | null>(null);
   
   const [effects, setEffects] = useState({
     slowed: false,
     reverb: false,
     lofi: false,
     subbass: false,
+    eightD: false,
   });
   const [mood, setMood] = useState<Mood>('none');
+  const [pitch, setPitch] = useState(0);
 
   const playerRef = useRef<Tone.Player | null>(null);
   const eqRef = useRef<Tone.EQ3 | null>(null);
@@ -30,34 +33,42 @@ export function useAudioEngine() {
   const distRef = useRef<Tone.Distortion | null>(null);
   const compressorRef = useRef<Tone.Compressor | null>(null);
   const limiterRef = useRef<Tone.Limiter | null>(null);
+  const pitchShiftRef = useRef<Tone.PitchShift | null>(null);
+  const autoPannerRef = useRef<Tone.AutoPanner | null>(null);
   const animationRef = useRef<number | null>(null);
 
   // Initialize nodes
   useEffect(() => {
     const player = new Tone.Player();
+    const pitchShift = new Tone.PitchShift({ pitch: 0 }); // Smooth pitch shifting
     const eq = new Tone.EQ3({ low: 0, mid: 0, high: 0, lowFrequency: 80 }); // Moved to 80Hz for tighter sub
     const reverb = new Tone.Freeverb({ roomSize: 0.5, dampening: 4000, wet: 0 }); // 4000Hz smooths out the ultra-high piercing ringing
     const filter = new Tone.Filter({ frequency: 20000, type: 'lowpass', rolloff: -24 });
     const dist = new Tone.Distortion({ distortion: 0.02, wet: 0 }); // Extremely low distortion
+    const autoPanner = new Tone.AutoPanner({ frequency: 0.1, depth: 1, wet: 0 }).start(); // 0.1Hz = 10s pan cycle for 8D
     const compressor = new Tone.Compressor({ threshold: -18, ratio: 3, attack: 0.05, release: 0.25 }); // Studio compression to prevent clipping smoothly
     const limiter = new Tone.Limiter(-1); // Safety ceiling
 
-    player.chain(eq, filter, dist, reverb, compressor, limiter, Tone.Destination);
+    player.chain(pitchShift, eq, filter, dist, autoPanner, reverb, compressor, limiter, Tone.Destination);
 
     playerRef.current = player;
+    pitchShiftRef.current = pitchShift;
     eqRef.current = eq;
     reverbRef.current = reverb;
     filterRef.current = filter;
     distRef.current = dist;
+    autoPannerRef.current = autoPanner;
     compressorRef.current = compressor;
     limiterRef.current = limiter;
 
     return () => {
       player.dispose();
+      pitchShift.dispose();
       eq.dispose();
       reverb.dispose();
       filter.dispose();
       dist.dispose();
+      autoPanner.dispose();
       compressor.dispose();
       limiter.dispose();
     };
@@ -65,13 +76,15 @@ export function useAudioEngine() {
 
   // Apply Effects
   useEffect(() => {
-    if (!playerRef.current || !eqRef.current || !reverbRef.current || !filterRef.current || !distRef.current) return;
+    if (!playerRef.current || !eqRef.current || !reverbRef.current || !filterRef.current || !distRef.current || !autoPannerRef.current || !pitchShiftRef.current) return;
 
     const p = playerRef.current;
+    const ps = pitchShiftRef.current;
     const eq = eqRef.current;
     const r = reverbRef.current;
     const f = filterRef.current;
     const d = distRef.current;
+    const pan = autoPannerRef.current;
 
     // Base values
     let playbackRate = 1;
@@ -81,6 +94,7 @@ export function useAudioEngine() {
     let distWet = 0;
     let bassBoost = 0;
     let mainVol = -2; // Base headroom to prevent WebAudio clipping
+    let pannerWet = effects.eightD ? 1 : 0;
 
     // Apply manual effects
     if (effects.slowed) playbackRate = 0.8;
@@ -166,13 +180,15 @@ export function useAudioEngine() {
     // Smoothly ramp parameters to avoid clicks
     p.playbackRate = playbackRate;
     p.volume.rampTo(mainVol, 0.1);
+    ps.pitch = pitch; // Apply pitch directly (cannot ramp)
     eq.low.rampTo(bassBoost, 0.1);
     r.wet.value = reverbWet;
     r.roomSize.value = currentRoomSize;
     f.frequency.rampTo(filterFreq, 0.1);
     d.wet.rampTo(distWet, 0.1);
+    pan.wet.rampTo(pannerWet, 0.5);
 
-  }, [effects, mood, roomSize]);
+  }, [effects, mood, roomSize, pitch]);
 
   // Load Audio
   const loadAudio = async (file: File) => {
@@ -192,6 +208,9 @@ export function useAudioEngine() {
       Tone.Transport.stop();
       Tone.Transport.position = 0;
       
+      // Extract array for waveform
+      setBufferData(playerRef.current.buffer.getChannelData(0));
+
       // Sync player to transport
       playerRef.current.sync().start(0);
     } catch (err) {
@@ -268,6 +287,8 @@ export function useAudioEngine() {
       const currentVol = playerRef.current.volume.value;
       const effectiveDuration = duration / currentRate;
       
+      const currentPitch = pitchShiftRef.current ? pitchShiftRef.current.pitch : 0;
+      const pWet = autoPannerRef.current ? autoPannerRef.current.wet.value : 0;
       const currentBass = eqRef.current.low.value;
       const rSize = reverbRef.current.roomSize.value;
       const rWet = reverbRef.current.wet.value;
@@ -278,18 +299,20 @@ export function useAudioEngine() {
       // Render offline 
       const renderedBuffer = await Tone.Offline(async ({ transport }) => {
         const offlinePlayer = new Tone.Player(buffer);
+        const offlinePitchShift = new Tone.PitchShift({ pitch: currentPitch });
         const offlineEq = new Tone.EQ3({ low: currentBass, mid: 0, high: 0, lowFrequency: 80 });
         const offlineReverb = new Tone.Freeverb({ roomSize: Math.min(rSize, 0.78), dampening: 4000, wet: rWet });
         
         const offlineFilter = new Tone.Filter({ frequency: fFreq, type: 'lowpass', rolloff: -24 });
         const offlineDist = new Tone.Distortion({ distortion: 0.02, wet: dWet });
+        const offlinePanner = new Tone.AutoPanner({ frequency: 0.1, depth: 1, wet: pWet }).start(0);
         const offlineCompressor = new Tone.Compressor({ threshold: -18, ratio: 3, attack: 0.05, release: 0.25 });
         const offlineLimiter = new Tone.Limiter(-1);
         
         offlinePlayer.playbackRate = currentRate;
         offlinePlayer.volume.value = currentVol;
         
-        offlinePlayer.chain(offlineEq, offlineFilter, offlineDist, offlineReverb, offlineCompressor, offlineLimiter).toDestination();
+        offlinePlayer.chain(offlinePitchShift, offlineEq, offlineFilter, offlineDist, offlinePanner, offlineReverb, offlineCompressor, offlineLimiter).toDestination();
         
         offlinePlayer.sync().start(0);
         transport.start(0);
@@ -339,6 +362,9 @@ export function useAudioEngine() {
     setEffects,
     mood,
     setMood,
+    pitch,
+    setPitch,
+    bufferData,
     loadAudio,
     togglePlay,
     seek,
